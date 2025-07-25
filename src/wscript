@@ -1,0 +1,111 @@
+//!wrt $BSPEC:{"frn": "Windows Script Host"}
+
+const bEnv = this.boxedEnv;
+
+class ScriptHost extends WApplication {
+    constructor() {
+        super();
+    }
+    popups = [];
+    win;
+    async main(argv) {
+        super.main(argv);
+        if(!argv[1]) {
+            return this.showSettings();
+        }
+        try {
+            const fp = this.getExactPath(argv[1]);
+            if(!await w96.FS.exists(fp)) {
+                const d = this.dialog(
+                    `Can not find the script file "${fp}".`,
+                    {
+                        icon: 'error',
+                        title: "Windows Script Host"
+                    }
+                );
+                d.wnd.onclose = () => {
+                    if(!this._terminating) this.terminate();
+                }
+                return;
+            }
+            const fileData = await w96.FS.readstr(fp);
+            const win = this.win = this.createWindow({
+                title: 'WSH Runtime',
+                body: '<iframe></iframe>',
+                taskbar: false,
+                initialWidth: 400,
+                initialHeight: 400
+            });
+            win.registerWindow();
+            win.onclose = () => {
+                frame.src = 'about:blank';
+                frame.remove();
+                if(!this._terminating) this.terminate();
+            };
+            const frame = win.wndObject.querySelector('iframe');
+            frame.src = `/_/C/local/WScript/sandbox.html?path=${encodeURIComponent(fp)}`;
+            await new Promise(e => frame.onload = () => e());
+            frame.contentWindow.ArgV = argv.slice(2);
+            frame.contentWindow.close = () => this.terminate();
+            frame.contentWindow.runAnyScript(fileData).then(_ => {
+                this.terminate();
+            }).catch(error => {
+                this.terminate();
+                alert(
+                    [
+                        "Script: " + fp,
+                        "Line:   " + (error.lineNumber ?? '...') ,
+                        "Char:   " + (error.charNumber ?? '...'),
+                        "Error:   " + this.getErrorMessage(error),
+                        "Code:    " + this.getErrorCode(error),
+                        "Source:  Microsoft JScript Compilation Error"
+                    ].map(item => item.replaceAll('&','&amp').replaceAll('<','&lt;').replaceAll('>','&gt;')).join('<br/>'),
+                    {
+                        title: 'Windows Script Host',
+                        icon: 'error'
+                    }
+                ).wnd.registerAppBar();
+            });
+        } catch (error) {
+            const d = this.dialog(
+                `A critical error occurred: ${error}`,
+                {
+                    icon: 'error',
+                    title: "Windows Script Host"
+                }
+            );
+            d.wnd.onclose = () => this.terminate();
+        }
+    }
+    getErrorMessage(error) {
+        return error.message;
+    }
+    getErrorCode(error) {
+        if(error.eCode) return error.eCode;
+        if(error instanceof SyntaxError) return '800A03EA';
+        return '...'
+    }
+    getExactPath(abs) {
+        if('ABCDEFGHIJLMNOPQRSTVUWXYZ'.includes(abs[0].toUpperCase()) && abs[1] === ':' && abs[2] === '/') return abs;
+        return w96.FSUtil.combinePath(bEnv?.cwd || 'c:/user', abs);
+    }
+    showSettings() {
+        // to do
+        this.terminate();
+    }
+    onterminated(result) {
+        super.onterminated(result);
+        this.popups.forEach(popup => {
+            if(popup && typeof popup.close === 'function') popup.close();
+        });
+    }
+    dialog(...args) {
+        const alert0 = alert(...args);
+        alert0.wnd.registerAppBar();
+        this.popups.push(alert0);
+        return alert0;
+    }
+};
+
+
+return await WApplication.execAsync(new ScriptHost(), this.boxedEnv.args, this.boxedEnv);
